@@ -4,4 +4,4 @@ yum install -y httpd
 # set -e
 yum -y install python3 python3-pip
 # cd /var/www/html/
-# pip3 install --upgrade -r requirements.txt
+pip3 install --upgrade -r requirements.txt
