@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
-ls
-ls home
-cd /home/ec2-user/app
+APP_DIR=/home/ec2-user/app
+mkdir -p $APP_DIR
+cd $APP_DIR
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
