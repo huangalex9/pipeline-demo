@@ -7,7 +7,7 @@ cd "$APP_DIR"
 python3 -m venv venv
 chown -R ec2-user:ec2-user "$APP_DIR"
 
-# Install deps as ec2-user
+# Install deps as the ec2-user
 sudo -u ec2-user bash -c "
   source /home/ec2-user/app/venv/bin/activate
   pip install --upgrade pip
