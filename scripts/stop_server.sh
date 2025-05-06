@@ -1,3 +1,3 @@
 #!/bin/bash
-# Gracefully stop any old Gunicorn processes (ignore if none)
+# Gracefully stop old Gunicorn processes (ignore if none running)
 pkill gunicorn || true
