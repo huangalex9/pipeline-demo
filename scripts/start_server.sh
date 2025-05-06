@@ -3,9 +3,7 @@ set -e
 APP_DIR=/home/ec2-user/app
 
 # Ensure the OpenAI API key is in the environment for this non‑login shell
-if [ -f /etc/profile.d/openai.sh ]; then
-  sudo bash /etc/profile.d/openai.sh
-fi
+sudo bash /etc/profile.d/openai.sh
 
 cd "$APP_DIR"
 source venv/bin/activate
