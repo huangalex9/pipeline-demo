@@ -5,15 +5,16 @@ Werkzeug==3.0.2
 
 # --- OpenAI + HTTP client ---
 openai==1.23.0
-httpx==0.27.0          # pinned for openai>=1.0 compatibility
+httpx==0.27.0
 
 # --- AWS / storage ---
-boto3==1.34.112        # pulls in botocore automatically
+boto3==1.34.112
 
 # --- data / processing ---
+numpy==1.26.4                   # ⇦ pin < 2.0 to satisfy OpenCV
+opencv-python-headless==4.9.0.80
 pandas==2.2.2
-opencv-python-headless==4.9.0.80   # for frame extraction (no GUI libs)
-moviepy==1.0.3                     # for audio extraction
+moviepy==1.0.3
 
-# --- confidence-scoring helper (external) ---
-llm-confidence==0.1.0              # provides LogprobsHandler
+# --- confidence-scoring helper ---
+llm-confidence==0.1.0
