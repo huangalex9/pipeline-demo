@@ -17,4 +17,4 @@ pandas==2.2.2
 moviepy==1.0.3
 
 # --- confidence-scoring helper ---
-llm-confidence==0.1.0
+llm-confidence
