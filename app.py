@@ -4,34 +4,33 @@ import os, uuid, tempfile, shutil, subprocess, json, time
 from pathlib import Path
 
 import cv2
-import boto3, botocore.exceptions
+import boto3
 import pandas as pd
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
-
 from openai import OpenAI
-from llm_confidence.logprobs_handler import LogprobsHandler      # external util
+from llm_confidence.logprobs_handler import LogprobsHandler  # external util
 
 # ─── Runtime / env config ──────────────────────────────────────────────────
-ALLOWED_IMG   = {"png", "jpg", "jpeg", "gif"}
-ALLOWED_VID   = {"mp4", "mov", "webm", "mkv", "avi"}
-BUCKET        = os.getenv("UPLOAD_BUCKET")
-REGION        = os.getenv("AWS_REGION", "us-west-2")
-SKILL_CSV     = os.getenv("SKILL_DEF_PATH", "resources/skill_definitions.csv")
-IMAGE_MODEL   = os.getenv("IMAGE_MODEL", "gpt-4o-mini")
-AUDIO_MODEL   = os.getenv("AUDIO_MODEL", "whisper-1")
-TEXT_MODEL    = os.getenv("TEXT_MODEL", "deepseek-chat")
-FRAMES        = 4             # thumbnails per video
-MAX_RETRIES   = 3
-RETRY_DELAY   = 1.0
+ALLOWED_IMG = {"png", "jpg", "jpeg", "gif"}
+ALLOWED_VID = {"mp4", "mov", "webm", "mkv", "avi"}
+BUCKET      = os.getenv("UPLOAD_BUCKET")
+REGION      = os.getenv("AWS_REGION", "us-west-2")
+SKILL_CSV   = os.getenv("SKILL_DEF_PATH", "resources/skill_definitions.csv")
+IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-4o-mini")
+AUDIO_MODEL = os.getenv("AUDIO_MODEL", "whisper-1")
+TEXT_MODEL  = os.getenv("TEXT_MODEL", "deepseek-chat")
+FRAMES      = 4
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0
 
-client = OpenAI()             # needs OPENAI_API_KEY in env
+client = OpenAI()                       # needs OPENAI_API_KEY in env
 s3     = boto3.client("s3", region_name=REGION)
 
 # ─── Flask basics ──────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024   # 200 MB uploads
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024   # 200 MB
 
 HTML_PAGE = """
 <!doctype html><html lang="en"><head><meta charset="UTF-8" />
@@ -43,8 +42,8 @@ pre{background:#f6f8fa;padding:1rem;border-radius:4px;white-space:pre-wrap}</sty
 </head><body>
 <h1>Ask ChatGPT – optional image <em>or</em> video</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-  <p><input type="text"  name="prompt" placeholder="Enter your question" required></p>
-  <p><input type="file" name="media"  accept="image/*,video/*"></p>
+  <p><input type="text" name="prompt" placeholder="Enter your question" required></p>
+  <p><input type="file" name="media" accept="image/*,video/*"></p>
   <button type="submit">Ask</button>
 </form>
 {% if answer %}<h2>Answer:</h2><pre>{{ answer }}</pre>{% endif %}
@@ -59,8 +58,8 @@ def prepare_skill_df(path: str | Path) -> pd.DataFrame:
         df.rename(columns={df.columns[0]: "Skill"}, inplace=True)
     return df.reset_index(drop=True)
 
-SKILL_DF = prepare_skill_df(SKILL_CSV)
-LOG_HANDLER = LogprobsHandler()
+SKILL_DF     = prepare_skill_df(SKILL_CSV)
+LOG_HANDLER  = LogprobsHandler()
 
 # ─── S3 utilities ─────────────────────────────────────────────────────────
 def s3_presign_upload(fileobj, key, mime):
@@ -79,36 +78,34 @@ def upload_image(file_storage):
 # ─── Video helpers (thumbnail + audio) ─────────────────────────────────────
 def extract_thumbnails(video_fh, frames=FRAMES):
     """Return list of presigned S3 URLs for JPEG thumbnails."""
-    tmp_dir   = tempfile.mkdtemp()
-    tmp_path  = os.path.join(tmp_dir, "video")
+    tmp_dir  = tempfile.mkdtemp()
+    tmp_path = os.path.join(tmp_dir, "video")
     video_fh.save(tmp_path)
 
-    # duration → sampling FPS
     try:
         meta = json.loads(subprocess.check_output([
-            "ffprobe","-v","error","-select_streams","v:0","-show_entries",
-            "format=duration","-of","json",tmp_path
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "format=duration", "-of", "json", tmp_path
         ]))
         dur = float(meta["format"]["duration"])
     except Exception:
         dur = 0
     fps_filter = f"fps={frames/dur}" if dur > 0 else "fps=1"
     subprocess.run(
-        ["ffmpeg","-i",tmp_path,"-vf",f"{fps_filter},scale=640:-1",
-         "-vframes",str(frames),"-q:v","2",os.path.join(tmp_dir,"f%02d.jpg")],
+        ["ffmpeg", "-i", tmp_path, "-vf", f"{fps_filter},scale=640:-1",
+         "-vframes", str(frames), "-q:v", "2", os.path.join(tmp_dir, "f%02d.jpg")],
         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
     urls = []
     for jpg in sorted(Path(tmp_dir).glob("f*.jpg")):
         with open(jpg, "rb") as fh:
-            key = f"uploads/{uuid.uuid4()}.jpg"
+            key  = f"uploads/{uuid.uuid4()}.jpg"
             urls.append(s3_presign_upload(fh, key, "image/jpeg"))
     shutil.rmtree(tmp_dir, ignore_errors=True)
     return urls
 
 def extract_audio_to_tmp(video_fh) -> Path:
-    """Return Path to temp MP3 extracted from uploaded video."""
     tmp_dir  = tempfile.mkdtemp()
     raw_path = os.path.join(tmp_dir, "raw")
     video_fh.save(raw_path)
@@ -121,24 +118,22 @@ def extract_audio_to_tmp(video_fh) -> Path:
 # ─── LLM-based processing steps ───────────────────────────────────────────
 def whisper_transcribe(audio_path: Path) -> str:
     with open(audio_path, "rb") as af:
-        resp = client.audio.transcriptions.create(
+        return client.audio.transcriptions.create(
             model=AUDIO_MODEL, file=af, response_format="text"
         )
-    return resp
 
 def summarize_frames(prompt, urls: list[str]) -> str:
-    parts = [{"type":"text","text":prompt}] + [
-        {"type":"image_url","image_url":{"url":u}} for u in urls
+    parts = [{"type": "text", "text": prompt}] + [
+        {"type": "image_url", "image_url": {"url": u}} for u in urls
     ]
     resp = client.chat.completions.create(
         model=IMAGE_MODEL,
-        messages=[{"role":"user","content":parts}],
+        messages=[{"role": "user", "content": parts}],
         temperature=0.7,
     )
     return resp.choices[0].message.content.strip()
 
 def label_skills(entry: dict) -> list[str]:
-    """Return top-N skill names + confidence dict (printed to server log)."""
     system = (
         "You are an expert skill-tagger for Delta Air Lines training videos.\n"
         "Select the 3-5 best-fitting labels from the list below and reply with "
@@ -147,23 +142,19 @@ def label_skills(entry: dict) -> list[str]:
         "; ".join(f"(id:{i}, label:{n})" for i, n in SKILL_DF["Skill"].items()) +
         '\n\nEXAMPLE: {"label_1":4,"label_2":17,"label_3":9}'
     )
-    user   = "\n".join(f"{k}: {entry[k]}" for k in ("title","transcript","summary"))
-    resp   = client.chat.completions.create(
+    user = "\n".join(f"{k}: {entry[k]}" for k in ("title", "transcript", "summary"))
+    resp = client.chat.completions.create(
         model=TEXT_MODEL,
-        messages=[{"role":"system","content":system},{"role":"user","content":user}],
-        logprobs=True, top_logprobs=2, response_format={"type":"json_object"},
+        messages=[{"role": "system", "content": system},
+                  {"role": "user",   "content": user}],
+        logprobs=True, top_logprobs=2, response_format={"type": "json_object"},
         temperature=0
     )
     reply  = json.loads(resp.choices[0].message.content)
     tokens = resp.choices[0].logprobs.content
     conf   = LOG_HANDLER.process_logprobs(LOG_HANDLER.format_logprobs(tokens))
-    skills = SKILL_DF.loc[[reply[k] for k in sorted(reply)], "Skill"].tolist()
     app.logger.info("Skill confidences: %s", conf)
-    return skills
-
-# ─── Allowed-file helper ──────────────────────────────────────────────────
-def allowed(fname: str, exts: set[str]) -> bool:
-    return "." in fname and fname.rsplit(".", 1)[1].lower() in exts
+    return SKILL_DF.loc[[reply[k] for k in sorted(reply)], "Skill"].tolist()
 
 # ─── Routes ───────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
@@ -172,21 +163,25 @@ def index():
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    prompt = request.form.get("prompt","").strip()
+    prompt = request.form.get("prompt", "").strip()
     if not prompt:
         return render_template_string(HTML_PAGE, answer="Please enter a prompt.")
-    
+
     media = request.files.get("media")
+
     # ----- IMAGE -----------------------------------------------------------
     if media and allowed(media.filename, ALLOWED_IMG):
         try:
             url   = upload_image(media)
-            parts = [{"type":"text","text":prompt},
-                     {"type":"image_url","image_url":{"url":url}}]
+            parts = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": url}}
+            ]
             resp  = client.chat.completions.create(
                 model=IMAGE_MODEL,
-                messages=[{"role":"user","content":parts}],
-                temperature=0.7)
+                messages=[{"role": "user", "content": parts}],
+                temperature=0.7
+            )
             answer = resp.choices[0].message.content.strip()
         except Exception as e:
             answer = f"Error: {e}"
@@ -195,25 +190,24 @@ def ask():
     # ----- VIDEO  (pipeline) ----------------------------------------------
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            # 1) thumbnails → summary
             thumb_urls = extract_thumbnails(media)
             summary    = summarize_frames(prompt, thumb_urls)
 
-            # 2) transcript via Whisper
-            media.stream.seek(0)                     # rewind
-            audio_tmp   = extract_audio_to_tmp(media)
-            transcript  = whisper_transcribe(audio_tmp)
-            audio_tmp.parent.unlink(missing_ok=True)
+            media.stream.seek(0)                       # rewind
+            audio_tmp  = extract_audio_to_tmp(media)
+            transcript = whisper_transcribe(audio_tmp)
 
-            # 3) skill labeling
+            # ── SAFE CLEAN-UP OF TEMP DIR
+            shutil.rmtree(audio_tmp.parent, ignore_errors=True)
+
             entry = {
-                "title"       : secure_filename(media.filename),
-                "transcript"  : transcript,
-                "summary"     : summary,
+                "title"      : secure_filename(media.filename),
+                "transcript" : transcript,
+                "summary"    : summary,
             }
             skills = label_skills(entry)
 
-            answer  = (
+            answer = (
                 f"**Summary**\n{summary}\n\n"
                 f"**Top skills**: {', '.join(skills)}\n\n"
                 f"**Transcript (first 400 chars)**\n{transcript[:400]}…"
@@ -226,8 +220,9 @@ def ask():
     try:
         resp = client.chat.completions.create(
             model=TEXT_MODEL,
-            messages=[{"role":"user","content":prompt}],
-            temperature=0.7)
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
         answer = resp.choices[0].message.content.strip()
     except Exception as e:
         answer = f"Error: {e}"
