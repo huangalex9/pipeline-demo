@@ -1,16 +1,14 @@
 # app.py  ────────────────────────────────────────────────────────────────────
 from __future__ import annotations
-import os, uuid, tempfile, shutil, subprocess, json, time
+import os, uuid, tempfile, shutil, subprocess, json
 from pathlib import Path
 
-import cv2
-import boto3
-import pandas as pd
+import boto3, pandas as pd
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
 from openai import OpenAI
-from llm_confidence.logprobs_handler import LogprobsHandler  # external util
+from llm_confidence.logprobs_handler import LogprobsHandler
 
 # ─── Runtime / env config ──────────────────────────────────────────────────
 ALLOWED_IMG = {"png", "jpg", "jpeg", "gif"}
@@ -22,11 +20,11 @@ IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-4o-mini")
 AUDIO_MODEL = os.getenv("AUDIO_MODEL", "whisper-1")
 TEXT_MODEL  = os.getenv("TEXT_MODEL", "deepseek-chat")
 FRAMES      = 4
-MAX_RETRIES = 3
-RETRY_DELAY = 1.0
 
-client = OpenAI()                       # needs OPENAI_API_KEY in env
-s3     = boto3.client("s3", region_name=REGION)
+client  = OpenAI()                      # needs OPENAI_API_KEY
+s3      = boto3.client("s3", region_name=REGION)
+SKILL_DF= pd.read_csv(SKILL_CSV).rename(columns=lambda c: c.strip()).reset_index(drop=True)
+LOG_HDL = LogprobsHandler()
 
 # ─── Flask basics ──────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -42,7 +40,7 @@ pre{background:#f6f8fa;padding:1rem;border-radius:4px;white-space:pre-wrap}</sty
 </head><body>
 <h1>Ask ChatGPT – optional image <em>or</em> video</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-  <p><input type="text" name="prompt" placeholder="Enter your question" required></p>
+  <p><input name="prompt" placeholder="Enter your question" required></p>
   <p><input type="file" name="media" accept="image/*,video/*"></p>
   <button type="submit">Ask</button>
 </form>
@@ -50,184 +48,126 @@ pre{background:#f6f8fa;padding:1rem;border-radius:4px;white-space:pre-wrap}</sty
 </body></html>
 """
 
-# ─── Helper: load & clean skill list ───────────────────────────────────────
-def prepare_skill_df(path: str | Path) -> pd.DataFrame:
-    df = pd.read_csv(path).copy()
-    df.columns = df.columns.str.strip()
-    if "Skill" not in df.columns:
-        df.rename(columns={df.columns[0]: "Skill"}, inplace=True)
-    return df.reset_index(drop=True)
-
-SKILL_DF     = prepare_skill_df(SKILL_CSV)
-LOG_HANDLER  = LogprobsHandler()
-
-# ─── S3 utilities ─────────────────────────────────────────────────────────
-def s3_presign_upload(fileobj, key, mime):
-    s3.upload_fileobj(fileobj, BUCKET, key, ExtraArgs={"ContentType": mime})
+# ─── S3 helpers ────────────────────────────────────────────────────────────
+def s3_put(buf, key, mime):
+    s3.upload_fileobj(buf, BUCKET, key, ExtraArgs={"ContentType": mime})
     return s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": BUCKET, "Key": key},
-        ExpiresIn=7 * 24 * 3600,
+        "get_object", Params={"Bucket": BUCKET, "Key": key}, ExpiresIn=7*24*3600
     )
 
-def upload_image(file_storage):
-    ext = secure_filename(file_storage.filename).rsplit(".", 1)[1].lower()
-    key = f"uploads/{uuid.uuid4()}.{ext}"
-    return s3_presign_upload(file_storage, key, file_storage.mimetype)
+def upload_image(fs):
+    ext = fs.filename.rsplit(".", 1)[1].lower()
+    return s3_put(fs, f"uploads/{uuid.uuid4()}.{ext}", fs.mimetype)
 
-# ─── Video helpers (thumbnail + audio) ─────────────────────────────────────
-def extract_thumbnails(video_fh, frames=FRAMES):
-    """Return list of presigned S3 URLs for JPEG thumbnails."""
-    tmp_dir  = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, "video")
-    video_fh.save(tmp_path)
+# ─── File-type guard (needed by /ask) ──────────────────────────────────────
+def allowed(filename: str, allowed_exts: set[str]) -> bool:
+    return bool(filename) and "." in filename and filename.rsplit(".", 1)[1].lower() in allowed_exts
 
+# ─── Video helpers ─────────────────────────────────────────────────────────
+def thumbnails(fs, n=FRAMES):
+    tmp = tempfile.mkdtemp(); raw = Path(tmp, "video"); fs.save(raw)
+    # duration → fps
     try:
-        meta = json.loads(subprocess.check_output([
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "format=duration", "-of", "json", tmp_path
-        ]))
-        dur = float(meta["format"]["duration"])
-    except Exception:
-        dur = 0
-    fps_filter = f"fps={frames/dur}" if dur > 0 else "fps=1"
-    subprocess.run(
-        ["ffmpeg", "-i", tmp_path, "-vf", f"{fps_filter},scale=640:-1",
-         "-vframes", str(frames), "-q:v", "2", os.path.join(tmp_dir, "f%02d.jpg")],
-        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-
-    urls = []
-    for jpg in sorted(Path(tmp_dir).glob("f*.jpg")):
-        with open(jpg, "rb") as fh:
-            key  = f"uploads/{uuid.uuid4()}.jpg"
-            urls.append(s3_presign_upload(fh, key, "image/jpeg"))
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+        dur = float(json.loads(subprocess.check_output(
+            ["ffprobe","-v","error","-select_streams","v:0","-show_entries",
+             "format=duration","-of","json",raw]))["format"]["duration"])
+    except Exception: dur = 0
+    fps = f"fps={n/dur}" if dur else "fps=1"
+    subprocess.run(["ffmpeg","-i",raw,"-vf",f"{fps},scale=640:-1",
+                    "-vframes",str(n),"-q:v","2",Path(tmp,"%02d.jpg")],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    urls=[]
+    for jpg in sorted(Path(tmp).glob("*.jpg")):
+        with open(jpg,"rb") as fh:
+            urls.append(s3_put(fh,f"uploads/{uuid.uuid4()}.jpg","image/jpeg"))
+    shutil.rmtree(tmp,ignore_errors=True)
     return urls
 
-def extract_audio_to_tmp(video_fh) -> Path:
-    tmp_dir  = tempfile.mkdtemp()
-    raw_path = os.path.join(tmp_dir, "raw")
-    video_fh.save(raw_path)
-    mp3_path = os.path.join(tmp_dir, "audio.mp3")
-    clip = VideoFileClip(raw_path)
-    clip.audio.write_audiofile(mp3_path, logger=None)
-    clip.close()
-    return Path(mp3_path)
+def audio_mp3(fs)->Path:
+    tmp=tempfile.mkdtemp(); raw=Path(tmp,"raw"); fs.save(raw)
+    mp3=Path(tmp,"audio.mp3")
+    VideoFileClip(raw).audio.write_audiofile(mp3, logger=None)
+    return mp3
 
-# ─── LLM-based processing steps ───────────────────────────────────────────
-def whisper_transcribe(audio_path: Path) -> str:
-    with open(audio_path, "rb") as af:
+# ─── OpenAI wrappers ───────────────────────────────────────────────────────
+def summarize(prompt, urls):
+    parts=[{"type":"text","text":prompt}]+[
+        {"type":"image_url","image_url":{"url":u}} for u in urls]
+    r=client.chat.completions.create(model=IMAGE_MODEL,
+        messages=[{"role":"user","content":parts}],temperature=0.7)
+    return r.choices[0].message.content.strip()
+
+def transcribe(mp3:Path):
+    with open(mp3,"rb") as f:
         return client.audio.transcriptions.create(
-            model=AUDIO_MODEL, file=af, response_format="text"
-        )
+            model=AUDIO_MODEL,file=f,response_format="text")
 
-def summarize_frames(prompt, urls: list[str]) -> str:
-    parts = [{"type": "text", "text": prompt}] + [
-        {"type": "image_url", "image_url": {"url": u}} for u in urls
-    ]
-    resp = client.chat.completions.create(
-        model=IMAGE_MODEL,
-        messages=[{"role": "user", "content": parts}],
-        temperature=0.7,
-    )
-    return resp.choices[0].message.content.strip()
+def tag_skills(entry):
+    system=("You are an expert skill-tagger.\n\n"+
+            "; ".join(f"(id:{i},label:{n})" for i,n in SKILL_DF["Skill"].items())+
+            '\n\nReturn JSON {"label_1":id,…}')
+    chat=client.chat.completions.create(model=TEXT_MODEL,
+        messages=[{"role":"system","content":system},
+                  {"role":"user","content":"\n".join(f"{k}:{entry[k]}" for k in entry)}],
+        response_format={"type":"json_object"})
+    ids=json.loads(chat.choices[0].message.content).values()
+    return SKILL_DF.loc[list(ids),"Skill"].tolist()
 
-def label_skills(entry: dict) -> list[str]:
-    system = (
-        "You are an expert skill-tagger for Delta Air Lines training videos.\n"
-        "Select the 3-5 best-fitting labels from the list below and reply with "
-        "ONE JSON object whose keys are label_1, label_2… and whose values "
-        "are integer ids only.\n\n" +
-        "; ".join(f"(id:{i}, label:{n})" for i, n in SKILL_DF["Skill"].items()) +
-        '\n\nEXAMPLE: {"label_1":4,"label_2":17,"label_3":9}'
-    )
-    user = "\n".join(f"{k}: {entry[k]}" for k in ("title", "transcript", "summary"))
-    resp = client.chat.completions.create(
-        model=TEXT_MODEL,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user",   "content": user}],
-        logprobs=True, top_logprobs=2, response_format={"type": "json_object"},
-        temperature=0
-    )
-    reply  = json.loads(resp.choices[0].message.content)
-    tokens = resp.choices[0].logprobs.content
-    conf   = LOG_HANDLER.process_logprobs(LOG_HANDLER.format_logprobs(tokens))
-    app.logger.info("Skill confidences: %s", conf)
-    return SKILL_DF.loc[[reply[k] for k in sorted(reply)], "Skill"].tolist()
-
-# ─── Routes ───────────────────────────────────────────────────────────────
+# ─── Routes ────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
-def index():
+def home():
     return render_template_string(HTML_PAGE)
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    prompt = request.form.get("prompt", "").strip()
+    prompt=request.form.get("prompt","").strip()
     if not prompt:
-        return render_template_string(HTML_PAGE, answer="Please enter a prompt.")
+        return render_template_string(HTML_PAGE,answer="Please enter a prompt.")
+    media=request.files.get("media")
 
-    media = request.files.get("media")
-
-    # ----- IMAGE -----------------------------------------------------------
+    # Image path
     if media and allowed(media.filename, ALLOWED_IMG):
         try:
-            url   = upload_image(media)
-            parts = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": url}}
-            ]
-            resp  = client.chat.completions.create(
-                model=IMAGE_MODEL,
-                messages=[{"role": "user", "content": parts}],
-                temperature=0.7
-            )
-            answer = resp.choices[0].message.content.strip()
+            url  = upload_image(media)
+            answer = summarize(prompt,[url])
         except Exception as e:
-            answer = f"Error: {e}"
-        return render_template_string(HTML_PAGE, answer=answer)
+            answer=f"Error: {e}"
+        return render_template_string(HTML_PAGE,answer=answer)
 
-    # ----- VIDEO  (pipeline) ----------------------------------------------
+    # Video path
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            thumb_urls = extract_thumbnails(media)
-            summary    = summarize_frames(prompt, thumb_urls)
+            thumbs   = thumbnails(media)
+            summary  = summarize(prompt, thumbs)
 
-            media.stream.seek(0)                       # rewind
-            audio_tmp  = extract_audio_to_tmp(media)
-            transcript = whisper_transcribe(audio_tmp)
+            media.stream.seek(0)
+            mp3      = audio_mp3(media)
+            transcript = transcribe(mp3)
 
-            # ── SAFE CLEAN-UP OF TEMP DIR
-            shutil.rmtree(audio_tmp.parent, ignore_errors=True)
+            shutil.rmtree(mp3.parent, ignore_errors=True)
 
-            entry = {
-                "title"      : secure_filename(media.filename),
-                "transcript" : transcript,
-                "summary"    : summary,
-            }
-            skills = label_skills(entry)
-
-            answer = (
-                f"**Summary**\n{summary}\n\n"
-                f"**Top skills**: {', '.join(skills)}\n\n"
-                f"**Transcript (first 400 chars)**\n{transcript[:400]}…"
-            )
+            labels = tag_skills({
+                "title":secure_filename(media.filename),
+                "transcript":transcript,
+                "summary":summary
+            })
+            answer=(f"**Summary**\n{summary}\n\n"
+                    f"**Top skills**: {', '.join(labels)}\n\n"
+                    f"**Transcript (first 400 chars)**\n{transcript[:400]}…")
         except Exception as e:
-            answer = f"Pipeline error: {e}"
-        return render_template_string(HTML_PAGE, answer=answer)
+            answer=f"Pipeline error: {e}"
+        return render_template_string(HTML_PAGE,answer=answer)
 
-    # ----- Text-only prompt ------------------------------------------------
+    # Text only
     try:
-        resp = client.chat.completions.create(
+        chat=client.chat.completions.create(
             model=TEXT_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
-        )
-        answer = resp.choices[0].message.content.strip()
+            messages=[{"role":"user","content":prompt}],temperature=0.7)
+        answer=chat.choices[0].message.content.strip()
     except Exception as e:
-        answer = f"Error: {e}"
-    return render_template_string(HTML_PAGE, answer=answer)
+        answer=f"Error: {e}"
+    return render_template_string(HTML_PAGE,answer=answer)
 
-# ─── Entry point for local dev ─────────────────────────────────────────────
-if __name__ == "__main__":
+# ─── local run ─────────────────────────────────────────────────────────────
+if __name__=="__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)
