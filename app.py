@@ -100,7 +100,7 @@ def transcribe(mp3:Path):
             model=AUDIO_MODEL,file=f,response_format="text")
 
 def tag(entry:dict)->list[str]:
-    system=("You are an expert skill-tagger.\n\n"+
+    system=("You are an expert skill-tagger. Identify up to 5 relevant skills. \n\n"+
             "; ".join(f"(id:{i},label:{row.Skill})" for i,row in SKILLS.iterrows())+
             '\n\nReturn JSON {"label_1":id,…}')
     resp=chat(model=TEXT_MODEL,
