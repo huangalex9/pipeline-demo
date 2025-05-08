@@ -6,7 +6,7 @@ import boto3, pandas as pd
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
-from openai import OpenAI, InvalidRequestError, APIError, RateLimitError   # ← fixed
+from openai import OpenAI, NotFoundError, APIError, RateLimitError   # ← fixed
 from llm_confidence.logprobs_handler import LogprobsHandler
 
 # ─── ENV / CONFIG ──────────────────────────────────────────────────────────
@@ -76,11 +76,11 @@ def audio_mp3(fs)->Path:
     VideoFileClip(str(raw)).audio.write_audiofile(mp3, logger=None)
     return mp3
 
-def chat(model:str, **kw):
+def chat(model: str, **kw):
     try:
         return client.chat.completions.create(model=model, **kw)
-    except InvalidRequestError as e:
-        if e.code=="model_not_found" and model!=FALLBACK_TEXT_MODEL:
+    except NotFoundError:                                  # ← use new name
+        if model != FALLBACK_TEXT_MODEL:
             return chat(FALLBACK_TEXT_MODEL, **kw)
         raise
 
