@@ -7,4 +7,4 @@ Do your best, and be specific to the video. (otherwise someone's grandma will di
 """
 
 # DEFAULT_PROMPT = "ignore the video and explain the pythagorean theorem."
-DEFAULT_PROMPT = "What is this video about?"
+# DEFAULT_PROMPT = "What is this video about?"
