@@ -18,9 +18,9 @@ REGION      = os.getenv("AWS_REGION","us-west-2")
 SKILL_CSV   = os.getenv("SKILL_DEF_PATH","resources/skill_definitions.csv")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL","gpt-4o-mini")
 AUDIO_MODEL = os.getenv("AUDIO_MODEL","whisper-1")
-TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")
-# TEXT_MODEL = "gpt-4o-mini"
-FALLBACK_TEXT_MODEL = "gpt-3.5-turbo"
+# TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")
+TEXT_MODEL = "gpt-4.1-nano"
+FALLBACK_TEXT_MODEL = "gpt-4.1-nano"
 FRAMES = 4
 
 client  = OpenAI()
