@@ -33,7 +33,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
-<title>Delta x SAAS Project – Skill Tagging in Video Data</title>
+<title>SAAS Delta Project</title>
 <style>
   body   {font-family:sans-serif; margin:2rem;}
   input[type=text], input[type=file] {width:60%; padding:.5rem;}
@@ -49,7 +49,7 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
   textarea {width:60%; height:6rem; resize:vertical;}   /* optional: larger prompt box */
 </style>
 </head><body>
-<h1>Ask ChatGPT – optional image/video</h1>
+<h1>Delta x SAAS Project – Skill Tagging in Video Data</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
   <p><textarea name="prompt" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
   <p><input type="file" name="media" accept="image/*,video/*"></p>
@@ -172,3 +172,4 @@ def ask():
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=8000,debug=True)
+# skill tagging for video data is working (chekpoint)
