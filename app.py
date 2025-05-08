@@ -33,17 +33,31 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
-<title>ChatGPT + Image/Video</title>
-<style>body{font-family:sans-serif;margin:2rem}
-input[type=text],input[type=file]{width:60%;padding:.5rem}
-button{padding:.5rem 1rem}pre{background:#f6f8fa;padding:1rem;border-radius:4px}</style>
+<title>Delta x SAAS Project – Skill Tagging in Video Data</title>
+<style>
+  body   {font-family:sans-serif; margin:2rem;}
+  input[type=text], input[type=file] {width:60%; padding:.5rem;}
+  button {padding:.5rem 1rem;}
+  /* --- keep answers inside the viewport --- */
+  pre {
+    background:#f6f8fa; padding:1rem; border-radius:4px;
+    white-space:pre-wrap;      /* allow line-wrapping */
+    word-wrap:break-word;      /* break long tokens/URLs */
+    overflow-x:auto;           /* show a scroll bar if it’s STILL too wide */
+    max-width: 100%;           /* never exceed the parent width */
+  }
+  textarea {width:60%; height:6rem; resize:vertical;}   /* optional: larger prompt box */
+</style>
 </head><body>
 <h1>Ask ChatGPT – optional image/video</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-<p><input name="prompt" placeholder="Enter prompt or [default_prompt]" required></p>
-<p><input type="file" name="media" accept="image/*,video/*"></p>
-<button type="submit">Ask</button></form>
-{% if answer %}<h2>Answer:</h2><pre>{{answer}}</pre>{% endif %}
+  <p><textarea name="prompt" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
+  <p><input type="file" name="media" accept="image/*,video/*"></p>
+  <button type="submit">Ask</button>
+</form>
+{% if answer %}
+  <h2>Answer:</h2><pre>{{ answer }}</pre>
+{% endif %}
 </body></html>"""
 
 # ─── helpers -----------------------------------------------------------------
