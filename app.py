@@ -48,7 +48,7 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
 </head><body>
 <h1>Delta × SAAS Project – Skill Tagging in Video Data</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-  <p><textarea name="prompt" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
+  <p><input name="prompt" placeholder="Enter prompt or [default_prompt]" required></p>
   <p><input type="file" name="media" accept="image/*,video/*"></p>
   <button type="submit">Ask</button>
 </form>
