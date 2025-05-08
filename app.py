@@ -36,9 +36,9 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
 input[type=text],input[type=file]{width:60%;padding:.5rem}
 button{padding:.5rem 1rem}pre{background:#f6f8fa;padding:1rem;border-radius:4px}</style>
 </head><body>
-<h1>Ask ChatGPT – optional image/video</h1>
+<h1>Delta x SAAS Project - Skill Tagging in Video Data</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-<p><textarea name="prompt" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
+<p><textarea name="prompt" style="width:60%; height:6rem;" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
 <p><input type="file" name="media" accept="image/*,video/*"></p>
 <button type="submit">Ask</button></form>
 {% if answer %}<h2>Answer:</h2><pre>{{answer}}</pre>{% endif %}
