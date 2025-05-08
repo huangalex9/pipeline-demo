@@ -134,7 +134,7 @@ def ask():
     # video
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            # if prompt=="[default_prompt]": prompt=DEFAULT_PROMPT
+            if prompt=="[default_prompt]": prompt=DEFAULT_PROMPT
             summary=summarize(prompt,thumbnails(media))
             media.stream.seek(0)
             mp3=audio_mp3(media)
