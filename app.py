@@ -96,16 +96,43 @@ def transcribe(mp3:Path):
         return client.audio.transcriptions.create(
             model=AUDIO_MODEL,file=f,response_format="text")
 
-def tag(entry):
-    system=("You are an expert skill-tagger.\n\n"+
-            "; ".join(f"(id:{i},label:{n})" for i,n in SKILLS["Skill"].items())+
-            '\n\nReturn JSON {"label_1":id,…}')
-    chat_resp=chat(model=TEXT_MODEL,
-        messages=[{"role":"system","content":system},
-                  {"role":"user","content":"\n".join(f"{k}:{entry[k]}" for k in entry)}],
-        response_format={"type":"json_object"})
-    ids=json.loads(chat_resp.choices[0].message.content).values()
-    return SKILLS.loc[list(ids),"Skill"].tolist()
+def tag(entry: dict) -> list[str]:
+    # ----- build and send prompt -------------------------------------------------
+    system = (
+        "You are an expert skill-tagger.\n\n" +
+        "; ".join(f"(id:{i}, label:{row.Skill})" for i, row in SKILLS.iterrows()) +
+        '\n\nReturn ONE JSON object like {"label_1":4,"label_2":17}.'
+    )
+    resp = chat(
+        model=TEXT_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": "\n".join(f"{k}: {entry[k]}" for k in entry)}
+        ],
+        response_format={"type": "json_object"},
+        temperature=0
+    )
+
+    # ----- extract & sanitize ids -----------------------------------------------
+    try:
+        raw_ids = json.loads(resp.choices[0].message.content).values()
+    except Exception:
+        return ["(model returned invalid JSON)"]
+
+    ids = []
+    for x in raw_ids:
+        try:
+            i = int(x)
+            if 0 <= i < len(SKILLS):
+                ids.append(i)
+        except (TypeError, ValueError):
+            continue
+
+    if not ids:
+        return ["(no valid ids returned)"]
+
+    # ----- lookup ---------------------------------------------------------------
+    return SKILLS.loc[ids, "Skill"].tolist()
 
 # ─── routes -----------------------------------------------------------------
 @app.route("/", methods=["GET"])
