@@ -6,7 +6,7 @@ import boto3, pandas as pd
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
-from openai import OpenAI, NotFoundError, APIError, RateLimitError   # ← fixed
+from openai import OpenAI, NotFoundError
 from llm_confidence.logprobs_handler import LogprobsHandler
 from constants import DEFAULT_PROMPT
 
@@ -18,7 +18,8 @@ REGION      = os.getenv("AWS_REGION","us-west-2")
 SKILL_CSV   = os.getenv("SKILL_DEF_PATH","resources/skill_definitions.csv")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL","gpt-4o-mini")
 AUDIO_MODEL = os.getenv("AUDIO_MODEL","whisper-1")
-TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")   # safe default
+# TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")
+TEXT_MODEL = "gpt-4o-mini"
 FALLBACK_TEXT_MODEL = "gpt-3.5-turbo"
 FRAMES      = 4
 
@@ -29,19 +30,29 @@ LOG     = LogprobsHandler()
 
 # ─── Flask UI ----------------------------------------------------------------
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"]=200*1024*1024
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <title>ChatGPT + Image/Video</title>
-<style>body{font-family:sans-serif;margin:2rem}
-input[type=text],input[type=file]{width:60%;padding:.5rem}
-button{padding:.5rem 1rem}pre{background:#f6f8fa;padding:1rem;border-radius:4px}</style>
+<style>
+  body{font-family:sans-serif;margin:2rem}
+  textarea,input[type=file]{width:60%;padding:.5rem;font-size:1rem}
+  textarea{height:6rem;resize:vertical}
+  button{padding:.5rem 1rem;font-size:1rem;margin-left:.5rem}
+  pre{
+    background:#f6f8fa;padding:1rem;border-radius:4px;
+    white-space:pre-wrap; word-break:break-word;            /* <<< keeps lines inside */
+    overflow-x:auto; max-width:100%;
+  }
+</style>
 </head><body>
-<h1>Delta x SAAS Project - Skill Tagging in Video Data</h1>
+<h1>Delta × SAAS Project – Skill Tagging in Video Data</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-<p><textarea name="prompt" style="width:60%; height:6rem;" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
-<p><input type="file" name="media" accept="image/*,video/*"></p>
-<button type="submit">Ask</button></form>
-{% if answer %}<h2>Answer:</h2><pre>{{answer}}</pre>{% endif %}
+  <p><textarea name="prompt" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
+  <p><input type="file" name="media" accept="image/*,video/*"></p>
+  <button type="submit">Ask</button>
+</form>
+{% if answer %}<h2>Answer:</h2><pre>{{ answer }}</pre>{% endif %}
 </body></html>"""
 
 # ─── helpers -----------------------------------------------------------------
@@ -56,7 +67,8 @@ def allowed(fn:str, exts:set[str])->bool:
 def thumbnails(fs, n=FRAMES):
     tmp=tempfile.mkdtemp(); raw=Path(tmp,"video"); fs.save(raw)
     dur=0
-    try: dur=float(json.loads(subprocess.check_output(
+    try:
+        dur=float(json.loads(subprocess.check_output(
             ["ffprobe","-v","error","-select_streams","v","-show_entries",
              "format=duration","-of","json",raw]))["format"]["duration"])
     except Exception: pass
@@ -77,19 +89,18 @@ def audio_mp3(fs)->Path:
     VideoFileClip(str(raw)).audio.write_audiofile(mp3, logger=None)
     return mp3
 
-def chat(model: str, **kw):
+def chat(model:str, **kw):
     try:
         return client.chat.completions.create(model=model, **kw)
-    except NotFoundError:                                  # ← use new name
-        if model != FALLBACK_TEXT_MODEL:
+    except NotFoundError:
+        if model!=FALLBACK_TEXT_MODEL:
             return chat(FALLBACK_TEXT_MODEL, **kw)
         raise
 
-def summarize(prompt, urls):
+def summarize(prompt,urls):
     parts=[{"type":"text","text":prompt}]+[
         {"type":"image_url","image_url":{"url":u}} for u in urls]
-    r=chat(model=IMAGE_MODEL,messages=[{"role":"user","content":parts}],
-           temperature=0.7)
+    r=chat(model=IMAGE_MODEL,messages=[{"role":"user","content":parts}],temperature=0.7)
     return r.choices[0].message.content.strip()
 
 def transcribe(mp3:Path):
@@ -97,49 +108,25 @@ def transcribe(mp3:Path):
         return client.audio.transcriptions.create(
             model=AUDIO_MODEL,file=f,response_format="text")
 
-def tag(entry: dict) -> list[str]:
-    # ----- build and send prompt -------------------------------------------------
-    system = (
-        "You are an expert skill-tagger.\n\n" +
-        "; ".join(f"(id:{i}, label:{row.Skill})" for i, row in SKILLS.iterrows()) +
-        '\n\nReturn ONE JSON object like {"label_1":4,"label_2":17}.'
-    )
-    resp = chat(
-        model=TEXT_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": "\n".join(f"{k}: {entry[k]}" for k in entry)}
-        ],
-        response_format={"type": "json_object"},
-        temperature=0
-    )
-
-    # ----- extract & sanitize ids -----------------------------------------------
+def tag(entry:dict)->list[str]:
+    system=("You are an expert skill-tagger.\n\n"+
+            "; ".join(f"(id:{i},label:{row.Skill})" for i,row in SKILLS.iterrows())+
+            '\n\nReturn JSON {"label_1":id,…}')
+    resp=chat(model=TEXT_MODEL,
+        messages=[{"role":"system","content":system},
+                  {"role":"user","content":"\n".join(f"{k}:{entry[k]}" for k in entry)}],
+        response_format={"type":"json_object"},temperature=0)
     try:
-        raw_ids = json.loads(resp.choices[0].message.content).values()
-    except Exception:
-        return ["(model returned invalid JSON)"]
-
-    ids = []
-    for x in raw_ids:
-        try:
-            i = int(x)
-            if 0 <= i < len(SKILLS):
-                ids.append(i)
-        except (TypeError, ValueError):
-            continue
-
-    if not ids:
-        return ["(no valid ids returned)"]
-
-    # ----- lookup ---------------------------------------------------------------
-    return SKILLS.loc[ids, "Skill"].tolist()
+        raw_ids=json.loads(resp.choices[0].message.content).values()
+    except Exception: return ["(invalid JSON)"]
+    ids=[int(x) for x in raw_ids if str(x).isdigit() and 0<=int(x)<len(SKILLS)]
+    return SKILLS.loc[ids,"Skill"].tolist() or ["(no valid ids)"]
 
 # ─── routes -----------------------------------------------------------------
-@app.route("/", methods=["GET"])
+@app.route("/",methods=["GET"])
 def home(): return render_template_string(PAGE)
 
-@app.route("/ask", methods=["POST"])
+@app.route("/ask",methods=["POST"])
 def ask():
     prompt=request.form.get("prompt","").strip()
     media=request.files.get("media")
@@ -148,23 +135,22 @@ def ask():
     # image
     if media and allowed(media.filename, ALLOWED_IMG):
         try:
-            url   = s3_url(media,f"uploads/{uuid.uuid4()}.{media.filename.rsplit('.',1)[1].lower()}", media.mimetype)
-            ans   = summarize(prompt,[url])
+            url=s3_url(media,f"uploads/{uuid.uuid4()}.{media.filename.rsplit('.',1)[1].lower()}",media.mimetype)
+            ans=summarize(prompt,[url])
         except Exception as e: ans=f"Error: {e}"
         return render_template_string(PAGE,answer=ans)
 
     # video
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            if prompt == "[default_prompt]":
-                prompt = DEFAULT_PROMPT
-            summary   = summarize(prompt, thumbnails(media))
+            if prompt=="[default_prompt]": prompt=DEFAULT_PROMPT
+            summary=summarize(prompt,thumbnails(media))
             media.stream.seek(0)
-            mp3       = audio_mp3(media)
-            transcript= transcribe(mp3)
-            shutil.rmtree(mp3.parent, ignore_errors=True)
-            skills    = tag({"title":secure_filename(media.filename),
-                             "transcript":transcript,"summary":summary})
+            mp3=audio_mp3(media)
+            transcript=transcribe(mp3)
+            shutil.rmtree(mp3.parent,ignore_errors=True)
+            skills=tag({"title":secure_filename(media.filename),
+                        "transcript":transcript,"summary":summary})
             ans=(f"**Summary**\n{summary}\n\n"
                  f"**Skills**: {', '.join(skills)}\n\n"
                  f"**Transcript (first 400 chars)**\n{transcript[:400]}…")
@@ -176,9 +162,8 @@ def ask():
         chat_resp=chat(model=TEXT_MODEL,
             messages=[{"role":"user","content":prompt}],temperature=0.7)
         ans=chat_resp.choices[0].message.content.strip()
-    except Exception as e:
-        ans=f"Error: {e}"
+    except Exception as e: ans=f"Error: {e}"
     return render_template_string(PAGE,answer=ans)
 
 if __name__=="__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host="0.0.0.0",port=8000,debug=True)
