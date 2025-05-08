@@ -8,6 +8,7 @@ from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
 from openai import OpenAI, NotFoundError, APIError, RateLimitError   # ← fixed
 from llm_confidence.logprobs_handler import LogprobsHandler
+from constants import DEFAULT_PROMPT
 
 # ─── ENV / CONFIG ──────────────────────────────────────────────────────────
 ALLOWED_IMG = {"png","jpg","jpeg","gif"}
@@ -37,7 +38,7 @@ button{padding:.5rem 1rem}pre{background:#f6f8fa;padding:1rem;border-radius:4px}
 </head><body>
 <h1>Ask ChatGPT – optional image/video</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-<p><input name="prompt" placeholder="Enter your question" required></p>
+<p><textarea name="prompt" placeholder="Enter prompt or [default_prompt]" required></textarea></p>
 <p><input type="file" name="media" accept="image/*,video/*"></p>
 <button type="submit">Ask</button></form>
 {% if answer %}<h2>Answer:</h2><pre>{{answer}}</pre>{% endif %}
@@ -155,6 +156,8 @@ def ask():
     # video
     if media and allowed(media.filename, ALLOWED_VID):
         try:
+            if prompt == "[default_prompt]":
+                prompt = DEFAULT_PROMPT
             summary   = summarize(prompt, thumbnails(media))
             media.stream.seek(0)
             mp3       = audio_mp3(media)
