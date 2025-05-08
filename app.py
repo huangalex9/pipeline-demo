@@ -2,36 +2,34 @@
 from __future__ import annotations
 import os, uuid, tempfile, shutil, subprocess, json
 from pathlib import Path
-
 import boto3, pandas as pd
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
-from openai import OpenAI
+from openai import OpenAI, error
 from llm_confidence.logprobs_handler import LogprobsHandler
 
-# ─── Runtime / env config ──────────────────────────────────────────────────
-ALLOWED_IMG = {"png", "jpg", "jpeg", "gif"}
-ALLOWED_VID = {"mp4", "mov", "webm", "mkv", "avi"}
+# ─── ENV / CONFIG ──────────────────────────────────────────────────────────
+ALLOWED_IMG = {"png","jpg","jpeg","gif"}
+ALLOWED_VID = {"mp4","mov","webm","mkv","avi"}
 BUCKET      = os.getenv("UPLOAD_BUCKET")
-REGION      = os.getenv("AWS_REGION", "us-west-2")
-SKILL_CSV   = os.getenv("SKILL_DEF_PATH", "resources/skill_definitions.csv")
-IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-4o-mini")
-AUDIO_MODEL = os.getenv("AUDIO_MODEL", "whisper-1")
-TEXT_MODEL  = os.getenv("TEXT_MODEL", "deepseek-chat")
+REGION      = os.getenv("AWS_REGION","us-west-2")
+SKILL_CSV   = os.getenv("SKILL_DEF_PATH","resources/skill_definitions.csv")
+IMAGE_MODEL = os.getenv("IMAGE_MODEL","gpt-4o-mini")
+AUDIO_MODEL = os.getenv("AUDIO_MODEL","whisper-1")
+TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")   # ← default always exists
+FALLBACK_TEXT_MODEL = "gpt-3.5-turbo"
 FRAMES      = 4
 
-client  = OpenAI()                      # needs OPENAI_API_KEY
+client  = OpenAI()
 s3      = boto3.client("s3", region_name=REGION)
-SKILL_DF= pd.read_csv(SKILL_CSV).rename(columns=lambda c: c.strip()).reset_index(drop=True)
-LOG_HDL = LogprobsHandler()
+SKILLS  = pd.read_csv(SKILL_CSV).rename(columns=lambda c:c.strip()).reset_index(drop=True)
+LOG     = LogprobsHandler()
 
-# ─── Flask basics ──────────────────────────────────────────────────────────
+# ─── FLASK UI ----------------------------------------------------------------
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
-
-HTML_PAGE = """
-<!doctype html><html><head><meta charset="utf-8">
+app.config["MAX_CONTENT_LENGTH"]=200*1024*1024
+PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <title>ChatGPT + Image/Video</title>
 <style>body{font-family:sans-serif;margin:2rem}
 input[type=text],input[type=file]{width:60%;padding:.5rem}
@@ -39,56 +37,59 @@ button{padding:.5rem 1rem}pre{background:#f6f8fa;padding:1rem;border-radius:4px}
 </head><body>
 <h1>Ask ChatGPT – optional image/video</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-  <p><input name="prompt" placeholder="Enter your question" required></p>
-  <p><input type="file" name="media" accept="image/*,video/*"></p>
-  <button type="submit">Ask</button>
-</form>
-{% if answer %}<h2>Answer:</h2><pre>{{ answer }}</pre>{% endif %}
-</body></html>
-"""
+<p><input name="prompt" placeholder="Enter your question" required></p>
+<p><input type="file" name="media" accept="image/*,video/*"></p>
+<button type="submit">Ask</button></form>
+{% if answer %}<h2>Answer:</h2><pre>{{answer}}</pre>{% endif %}
+</body></html>"""
 
-# ─── helpers ----------------------------------------------------------------
-def s3_put(buf, key, mime):
-    s3.upload_fileobj(buf, BUCKET, key, ExtraArgs={"ContentType": mime})
+# ─── helpers -----------------------------------------------------------------
+def s3_url(buf,key,mime):
+    s3.upload_fileobj(buf, BUCKET, key, ExtraArgs={"ContentType":mime})
     return s3.generate_presigned_url("get_object",
-        Params={"Bucket": BUCKET, "Key": key}, ExpiresIn=7*24*3600)
+        Params={"Bucket":BUCKET,"Key":key},ExpiresIn=604800)
 
-def upload_image(fs):
-    ext = fs.filename.rsplit(".",1)[1].lower()
-    return s3_put(fs, f"uploads/{uuid.uuid4()}.{ext}", fs.mimetype)
-
-def allowed(fn:str, exts:set[str]) -> bool:
+def allowed(fn:str, exts:set[str])->bool:
     return fn and "." in fn and fn.rsplit(".",1)[1].lower() in exts
 
 def thumbnails(fs, n=FRAMES):
-    tmp=tempfile.mkdtemp(); raw=Path(tmp,"video"); fs.save(raw)
+    tmp=tempfile.mkdtemp(); raw=Path(tmp,"v"); fs.save(raw)
+    dur=0
     try:
         dur=float(json.loads(subprocess.check_output(
             ["ffprobe","-v","error","-select_streams","v","-show_entries",
              "format=duration","-of","json",raw]))["format"]["duration"])
-    except Exception: dur=0
+    except Exception: pass
     fps=f"fps={n/dur}" if dur else "fps=1"
     subprocess.run(["ffmpeg","-i",raw,"-vf",f"{fps},scale=640:-1",
                     "-vframes",str(n),"-q:v","2",Path(tmp,"%02d.jpg")],
                    check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     urls=[]
-    for jpg in sorted(Path(tmp).glob("*.jpg")):
+    for jpg in Path(tmp).glob("*.jpg"):
         with open(jpg,"rb") as fh:
-            urls.append(s3_put(fh,f"uploads/{uuid.uuid4()}.jpg","image/jpeg"))
+            urls.append(s3_url(fh,f"uploads/{uuid.uuid4()}.jpg","image/jpeg"))
     shutil.rmtree(tmp,ignore_errors=True)
     return urls
 
-def audio_mp3(fs) -> Path:
+def audio_mp3(fs)->Path:
     tmp=tempfile.mkdtemp(); raw=Path(tmp,"raw"); fs.save(raw)
     mp3=Path(tmp,"audio.mp3")
-    VideoFileClip(str(raw)).audio.write_audiofile(mp3, logger=None)  # ← cast to str
+    VideoFileClip(str(raw)).audio.write_audiofile(mp3, logger=None)
     return mp3
+
+def chat(model:str, **kw):
+    try:
+        return client.chat.completions.create(model=model, **kw)
+    except error.InvalidRequestError as e:
+        if e.code=="model_not_found" and model!=FALLBACK_TEXT_MODEL:
+            return chat(FALLBACK_TEXT_MODEL, **kw)
+        raise
 
 def summarize(prompt, urls):
     parts=[{"type":"text","text":prompt}]+[
         {"type":"image_url","image_url":{"url":u}} for u in urls]
-    r=client.chat.completions.create(model=IMAGE_MODEL,
-        messages=[{"role":"user","content":parts}],temperature=0.7)
+    r=chat(model=IMAGE_MODEL,messages=[{"role":"user","content":parts}],
+           temperature=0.7)
     return r.choices[0].message.content.strip()
 
 def transcribe(mp3:Path):
@@ -96,60 +97,61 @@ def transcribe(mp3:Path):
         return client.audio.transcriptions.create(
             model=AUDIO_MODEL,file=f,response_format="text")
 
-def tag_skills(entry):
+def tag(entry):
     system=("You are an expert skill-tagger.\n\n"+
-            "; ".join(f"(id:{i},label:{n})" for i,n in SKILL_DF["Skill"].items())+
+            "; ".join(f"(id:{i},label:{n})" for i,n in SKILLS["Skill"].items())+
             '\n\nReturn JSON {"label_1":id,…}')
-    chat=client.chat.completions.create(model=TEXT_MODEL,
+    chat_resp=chat(model=TEXT_MODEL,
         messages=[{"role":"system","content":system},
                   {"role":"user","content":"\n".join(f"{k}:{entry[k]}" for k in entry)}],
         response_format={"type":"json_object"})
-    ids=json.loads(chat.choices[0].message.content).values()
-    return SKILL_DF.loc[list(ids),"Skill"].tolist()
+    ids=json.loads(chat_resp.choices[0].message.content).values()
+    return SKILLS.loc[list(ids),"Skill"].tolist()
 
-# ─── routes ----------------------------------------------------------------
+# ─── routes -----------------------------------------------------------------
 @app.route("/", methods=["GET"])
-def home(): return render_template_string(HTML_PAGE)
+def home(): return render_template_string(PAGE)
 
 @app.route("/ask", methods=["POST"])
 def ask():
     prompt=request.form.get("prompt","").strip()
-    if not prompt: return render_template_string(HTML_PAGE, answer="Need a prompt.")
     media=request.files.get("media")
+    if not prompt: return render_template_string(PAGE,answer="Need a prompt.")
 
     # image
     if media and allowed(media.filename, ALLOWED_IMG):
-        try: answer=summarize(prompt,[upload_image(media)])
-        except Exception as e: answer=f"Error: {e}"
-        return render_template_string(HTML_PAGE, answer=answer)
+        try:
+            url   = s3_url(media, f"uploads/{uuid.uuid4()}.{media.filename.rsplit('.',1)[1].lower()}", media.mimetype)
+            ans   = summarize(prompt,[url])
+        except Exception as e: ans=f"Error: {e}"
+        return render_template_string(PAGE,answer=ans)
 
     # video
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            summary = summarize(prompt, thumbnails(media))
+            thumbs   = thumbnails(media)
+            summary  = summarize(prompt, thumbs)
             media.stream.seek(0)
             mp3      = audio_mp3(media)
             transcript = transcribe(mp3)
             shutil.rmtree(mp3.parent, ignore_errors=True)
-            labels = tag_skills({
-                "title":secure_filename(media.filename),
-                "transcript":transcript,
-                "summary":summary})
-            answer=(f"**Summary**\n{summary}\n\n"
-                    f"**Top skills**: {', '.join(labels)}\n\n"
-                    f"**Transcript (first 400 chars)**\n{transcript[:400]}…")
+            skills   = tag({"title":secure_filename(media.filename),
+                            "transcript":transcript,"summary":summary})
+            ans=(f"**Summary**\n{summary}\n\n"
+                 f"**Skills**: {', '.join(skills)}\n\n"
+                 f"**Transcript (first 400 chars)**\n{transcript[:400]}…")
         except Exception as e:
-            answer=f"Pipeline error: {e}"
-        return render_template_string(HTML_PAGE, answer=answer)
+            ans=f"Pipeline error: {e}"
+        return render_template_string(PAGE,answer=ans)
 
-    # text
+    # text only
     try:
-        chat=client.chat.completions.create(
-            model=TEXT_MODEL,messages=[{"role":"user","content":prompt}],temperature=0.7)
-        answer=chat.choices[0].message.content.strip()
+        chat_resp=chat(model=TEXT_MODEL,
+            messages=[{"role":"user","content":prompt}],temperature=0.7)
+        ans=chat_resp.choices[0].message.content.strip()
     except Exception as e:
-        answer=f"Error: {e}"
-    return render_template_string(HTML_PAGE, answer=answer)
+        ans=f"Error: {e}"
+    return render_template_string(PAGE,answer=ans)
 
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)
