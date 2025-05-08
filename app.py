@@ -6,7 +6,7 @@ import boto3, pandas as pd
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 from flask import Flask, request, render_template_string
-from openai import OpenAI, error
+from openai import OpenAI, InvalidRequestError, APIError, RateLimitError   # ← fixed
 from llm_confidence.logprobs_handler import LogprobsHandler
 
 # ─── ENV / CONFIG ──────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ REGION      = os.getenv("AWS_REGION","us-west-2")
 SKILL_CSV   = os.getenv("SKILL_DEF_PATH","resources/skill_definitions.csv")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL","gpt-4o-mini")
 AUDIO_MODEL = os.getenv("AUDIO_MODEL","whisper-1")
-TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")   # ← default always exists
+TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")   # safe default
 FALLBACK_TEXT_MODEL = "gpt-3.5-turbo"
 FRAMES      = 4
 
@@ -26,7 +26,7 @@ s3      = boto3.client("s3", region_name=REGION)
 SKILLS  = pd.read_csv(SKILL_CSV).rename(columns=lambda c:c.strip()).reset_index(drop=True)
 LOG     = LogprobsHandler()
 
-# ─── FLASK UI ----------------------------------------------------------------
+# ─── Flask UI ----------------------------------------------------------------
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"]=200*1024*1024
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
@@ -53,10 +53,9 @@ def allowed(fn:str, exts:set[str])->bool:
     return fn and "." in fn and fn.rsplit(".",1)[1].lower() in exts
 
 def thumbnails(fs, n=FRAMES):
-    tmp=tempfile.mkdtemp(); raw=Path(tmp,"v"); fs.save(raw)
+    tmp=tempfile.mkdtemp(); raw=Path(tmp,"video"); fs.save(raw)
     dur=0
-    try:
-        dur=float(json.loads(subprocess.check_output(
+    try: dur=float(json.loads(subprocess.check_output(
             ["ffprobe","-v","error","-select_streams","v","-show_entries",
              "format=duration","-of","json",raw]))["format"]["duration"])
     except Exception: pass
@@ -80,7 +79,7 @@ def audio_mp3(fs)->Path:
 def chat(model:str, **kw):
     try:
         return client.chat.completions.create(model=model, **kw)
-    except error.InvalidRequestError as e:
+    except InvalidRequestError as e:
         if e.code=="model_not_found" and model!=FALLBACK_TEXT_MODEL:
             return chat(FALLBACK_TEXT_MODEL, **kw)
         raise
@@ -121,7 +120,7 @@ def ask():
     # image
     if media and allowed(media.filename, ALLOWED_IMG):
         try:
-            url   = s3_url(media, f"uploads/{uuid.uuid4()}.{media.filename.rsplit('.',1)[1].lower()}", media.mimetype)
+            url   = s3_url(media,f"uploads/{uuid.uuid4()}.{media.filename.rsplit('.',1)[1].lower()}", media.mimetype)
             ans   = summarize(prompt,[url])
         except Exception as e: ans=f"Error: {e}"
         return render_template_string(PAGE,answer=ans)
@@ -129,22 +128,20 @@ def ask():
     # video
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            thumbs   = thumbnails(media)
-            summary  = summarize(prompt, thumbs)
+            summary   = summarize(prompt, thumbnails(media))
             media.stream.seek(0)
-            mp3      = audio_mp3(media)
-            transcript = transcribe(mp3)
+            mp3       = audio_mp3(media)
+            transcript= transcribe(mp3)
             shutil.rmtree(mp3.parent, ignore_errors=True)
-            skills   = tag({"title":secure_filename(media.filename),
-                            "transcript":transcript,"summary":summary})
+            skills    = tag({"title":secure_filename(media.filename),
+                             "transcript":transcript,"summary":summary})
             ans=(f"**Summary**\n{summary}\n\n"
                  f"**Skills**: {', '.join(skills)}\n\n"
                  f"**Transcript (first 400 chars)**\n{transcript[:400]}…")
-        except Exception as e:
-            ans=f"Pipeline error: {e}"
+        except Exception as e: ans=f"Pipeline error: {e}"
         return render_template_string(PAGE,answer=ans)
 
-    # text only
+    # text
     try:
         chat_resp=chat(model=TEXT_MODEL,
             messages=[{"role":"user","content":prompt}],temperature=0.7)
