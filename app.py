@@ -18,10 +18,10 @@ REGION      = os.getenv("AWS_REGION","us-west-2")
 SKILL_CSV   = os.getenv("SKILL_DEF_PATH","resources/skill_definitions.csv")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL","gpt-4o-mini")
 AUDIO_MODEL = os.getenv("AUDIO_MODEL","whisper-1")
-# TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")
-TEXT_MODEL = "gpt-4o-mini"
+TEXT_MODEL  = os.getenv("TEXT_MODEL","gpt-3.5-turbo")
+# TEXT_MODEL = "gpt-4o-mini"
 FALLBACK_TEXT_MODEL = "gpt-3.5-turbo"
-FRAMES      = 4
+FRAMES = 4
 
 client  = OpenAI()
 s3      = boto3.client("s3", region_name=REGION)
@@ -34,25 +34,16 @@ app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <title>ChatGPT + Image/Video</title>
-<style>
-  body{font-family:sans-serif;margin:2rem}
-  textarea,input[type=file]{width:60%;padding:.5rem;font-size:1rem}
-  textarea{height:6rem;resize:vertical}
-  button{padding:.5rem 1rem;font-size:1rem;margin-left:.5rem}
-  pre{
-    background:#f6f8fa;padding:1rem;border-radius:4px;
-    white-space:pre-wrap; word-break:break-word;            /* <<< keeps lines inside */
-    overflow-x:auto; max-width:100%;
-  }
-</style>
+<style>body{font-family:sans-serif;margin:2rem}
+input[type=text],input[type=file]{width:60%;padding:.5rem}
+button{padding:.5rem 1rem}pre{background:#f6f8fa;padding:1rem;border-radius:4px}</style>
 </head><body>
-<h1>Delta × SAAS Project – Skill Tagging in Video Data</h1>
+<h1>Ask ChatGPT – optional image/video</h1>
 <form action="/ask" method="post" enctype="multipart/form-data">
-  <p><input name="prompt" placeholder="Enter prompt or [default_prompt]" required></p>
-  <p><input type="file" name="media" accept="image/*,video/*"></p>
-  <button type="submit">Ask</button>
-</form>
-{% if answer %}<h2>Answer:</h2><pre>{{ answer }}</pre>{% endif %}
+<p><input name="prompt" placeholder="Enter prompt or [default_prompt]" required></p>
+<p><input type="file" name="media" accept="image/*,video/*"></p>
+<button type="submit">Ask</button></form>
+{% if answer %}<h2>Answer:</h2><pre>{{answer}}</pre>{% endif %}
 </body></html>"""
 
 # ─── helpers -----------------------------------------------------------------
@@ -143,7 +134,7 @@ def ask():
     # video
     if media and allowed(media.filename, ALLOWED_VID):
         try:
-            if prompt=="[default_prompt]": prompt=DEFAULT_PROMPT
+            # if prompt=="[default_prompt]": prompt=DEFAULT_PROMPT
             summary=summarize(prompt,thumbnails(media))
             media.stream.seek(0)
             mp3=audio_mp3(media)
