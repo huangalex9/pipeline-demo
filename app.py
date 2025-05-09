@@ -125,7 +125,8 @@ def tag(entry:dict)->list[str]:
         raw_ids=json.loads(resp.choices[0].message.content).values()
     except Exception: return ["(invalid JSON)"]
     ids=[int(x) for x in raw_ids if str(x).isdigit() and 0<=int(x)<len(SKILLS)]
-    return SKILLS["Skill"].iloc[ids].tolist() or ["(no valid ids)"]
+    # return SKILLS["Skill"].iloc[ids].tolist() or ["(no valid ids)"]
+    return SKILLS.loc[ids,"Skill"].tolist() or ["(no valid ids)"]
 
 # ─── routes -----------------------------------------------------------------
 @app.route("/",methods=["GET"])
