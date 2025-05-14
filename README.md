@@ -78,13 +78,16 @@ Deployment is handled by AWS CodePipeline, which:
 
 ## 📦 Sample Skill Tag Output
 
-**Summary**
+**Summary**  
 The video is part of an online learning course focused on **Fire Extinguisher Safety**. It covers various aspects such as:
-overview of the importance of fire extinguishers.
-- **n ectives earnine vuecomes expented arom the cou see nucle derstanding inspection, proper mounting, installation, risks, and response related to
-fire extinguishers.
-- **Navigation**: Guidance on how to move through the course materials effectively.
+
+- **Introduction**: An overview of the importance of fire extinguishers  
+- **Objectives**: Learning objectives expected from the course, including understanding inspection, proper mounting, installation, risks, and response related to fire extinguishers  
+- **Navigation**: Guidance on how to move through the course materials effectively  
+
 Overall, the course aims to educate participants on the proper use and maintenance of fire extinguishers to ensure safety in case of fire emergencies.
+
 **Skills**: Adult Learning Principles, Compliance Training, Safety Training, Training And Development, Writing
-**Transcript (first 400 chars)**
-you The first rule of firefighting is get help, but in the event that you use a fire extinguisher, proper understanding will help us all maintain maximum protection. After completing this module, you will be able to state company policies and procedures regarding fire extinguisher safety and attempting to fight fires. Identify hazards associated with the initial stage of fighting a fire. Identify...
+
+**Transcript (first 400 chars)**  
+The first rule of firefighting is get help, but in the event that you use a fire extinguisher, proper understanding will help us all maintain maximum protection. After completing this module, you will be able to state company policies and procedures regarding fire extinguisher safety and attempting to fight fires. Identify hazards associated with the initial stage of fighting a fire. Identify ...
