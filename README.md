@@ -50,7 +50,7 @@ Deployment is handled by AWS CodePipeline, which:
 ## 🔧 Deployment Pipeline
 
 - **Source** – GitHub repository  
-- **Build** – Compresses the repo into `app.zip`  
+- **Build** – Compresses the repo into `app.zip` (optional) 
 - **Deploy** – CodeDeploy:
   - Installs dependencies  
   - Starts the Flask server via `gunicorn`  
