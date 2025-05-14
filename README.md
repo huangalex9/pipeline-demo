@@ -40,7 +40,6 @@ Deployment is handled by AWS CodePipeline, which:
 | `appspec.yml`      | CodeDeploy specification for deployment hooks                  |
 | `buildspec.yml`    | CodePipeline build script (archives app for deployment)        |
 | `constants.py`     | Contains the default prompt used in summarization              |
-| `index.html`       | HTML template (inline in `app.py`) for the web UI              |
 | `requirements.txt` | Python dependencies                                             |
 | `testing.sh`       | Shell script for basic testing / local setup                   |
 | `scripts/`         | Deployment lifecycle scripts (install, start, stop)            |
@@ -50,7 +49,6 @@ Deployment is handled by AWS CodePipeline, which:
 ## 🔧 Deployment Pipeline
 
 - **Source** – GitHub repository  
-- **Build** – Compresses the repo into `app.zip` (optional) 
 - **Deploy** – CodeDeploy:
   - Installs dependencies  
   - Starts the Flask server via `gunicorn`  
