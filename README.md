@@ -66,7 +66,7 @@ Deployment is handled by AWS CodePipeline, which:
 
 ## 🧪 Usage
 
-1. Open the app in your browser.
+1. Open the app in your browser: http://54.153.7.11:8000/.
 2. Enter a prompt or use the default.
 3. Upload an image or video file.
 4. View the output:
