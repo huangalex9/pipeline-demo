@@ -78,6 +78,7 @@ Deployment is handled by AWS CodePipeline, which:
 
 ## 📦 Sample Skill Tag Output
 
+```text
 **Summary**  
 The video is part of an online learning course focused on **Fire Extinguisher Safety**. It covers various aspects such as:
 
