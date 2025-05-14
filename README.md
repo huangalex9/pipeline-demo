@@ -38,7 +38,6 @@ Deployment is handled by AWS CodePipeline, which:
 |--------------------|-----------------------------------------------------------------|
 | `app.py`           | Core Flask application: handles uploads, summarization, transcription, tagging |
 | `appspec.yml`      | CodeDeploy specification for deployment hooks                  |
-| `buildspec.yml`    | CodePipeline build script (archives app for deployment)        |
 | `constants.py`     | Contains the default prompt used in summarization              |
 | `requirements.txt` | Python dependencies                                             |
 | `testing.sh`       | Shell script for basic testing / local setup                   |
